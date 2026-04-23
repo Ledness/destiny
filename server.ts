@@ -12,7 +12,7 @@ async function startServer() {
     cors: { origin: "*" },
   });
 
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 5000;
   // Dynamic path resolution for any hosting environment (Vercel, Replit, etc.)
   const distPath = path.join(process.cwd(), "dist");
   const indexPath = path.join(distPath, "index.html");

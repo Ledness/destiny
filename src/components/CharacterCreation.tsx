@@ -35,6 +35,27 @@ export function CharacterCreation({ onComplete, onBack }: CharacterCreationProps
       "무사", "사무라이", "닌자", "해적", "음유시인", "퇴마사", "주술사", "무희", "기공사", "검사"
     ];
     
+    const getJobStats = (jobName: string) => {
+      let hp = 200;
+      let mp = 200;
+
+      if (jobName.match(/전사|기사|바바리안|성기사|수호자/)) {
+        hp += 50;
+        mp -= 20;
+      } else if (jobName.match(/마법사|소서러|워록|현자|술사/)) {
+        mp += 50;
+        hp -= 20;
+      } else if (jobName.match(/성직자|사제|팔라딘/)) {
+        hp += 30;
+        mp += 30;
+      } else if (jobName.match(/도적|암살자|궁수|레인저/)) {
+        hp += 10;
+        mp += 10;
+      }
+
+      return { hp, mp };
+    };
+
     const randomInfo: UserInfo = {
       name: names[Math.floor(Math.random() * names.length)],
       race: races[Math.floor(Math.random() * races.length)],
@@ -42,7 +63,7 @@ export function CharacterCreation({ onComplete, onBack }: CharacterCreationProps
       level: 1,
       exp: 0,
       maxExp: 100,
-      hp: 170,
+      hp: 170, // Will be overridden
       maxHp: 170,
       mp: 160,
       maxMp: 160,
@@ -61,8 +82,14 @@ export function CharacterCreation({ onComplete, onBack }: CharacterCreationProps
       ownedFateKeywords: [],
       ownedNormalKeywords: []
     };
+
+    const stats = getJobStats(randomInfo.job);
+    randomInfo.hp = stats.hp;
+    randomInfo.maxHp = stats.hp;
+    randomInfo.mp = stats.mp;
+    randomInfo.maxMp = stats.mp;
     
-    alert(`운명이 결정되었습니다!\n\n이름: ${randomInfo.name}\n종족: ${randomInfo.race}\n직업: ${randomInfo.job}`);
+    alert(`운명이 결정되었습니다!\n\n이름: ${randomInfo.name}\n종족: ${randomInfo.race}\n직업: ${randomInfo.job}\n(HP: ${stats.hp} / MP: ${stats.mp})`);
     onComplete(randomInfo);
   };
 
@@ -89,6 +116,30 @@ export function CharacterCreation({ onComplete, onBack }: CharacterCreationProps
       alert("직업을 입력하세요.");
       return;
     }
+
+    const getJobStats = (jobName: string) => {
+      let hp = 200;
+      let mp = 200;
+
+      if (jobName.match(/전사|기사|바바리안|성기사|수호자/)) {
+        hp += 50;
+        mp -= 20;
+      } else if (jobName.match(/마법사|소서러|워록|현자|술사/)) {
+        mp += 50;
+        hp -= 20;
+      } else if (jobName.match(/성직자|사제|팔라딘/)) {
+        hp += 30;
+        mp += 30;
+      } else if (jobName.match(/도적|암살자|궁수|레인저/)) {
+        hp += 10;
+        mp += 10;
+      }
+
+      return { hp, mp };
+    };
+
+    const stats = getJobStats(job);
+
     onComplete({ 
       name, 
       race, 
@@ -96,10 +147,10 @@ export function CharacterCreation({ onComplete, onBack }: CharacterCreationProps
       level: 1,
       exp: 0,
       maxExp: 100,
-      hp: 170,
-      maxHp: 170,
-      mp: 160,
-      maxMp: 160,
+      hp: stats.hp,
+      maxHp: stats.hp,
+      mp: stats.mp,
+      maxMp: stats.mp,
       stats: { str: 15, dex: 15, int: 15, vit: 15 },
       statPoints: 0,
       equipment: {

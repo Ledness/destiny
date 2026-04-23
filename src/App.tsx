@@ -63,6 +63,8 @@ export default function App() {
   const [targetNumber, setTargetNumber] = useState<number | null>(null);
   const [isFading, setIsFading] = useState(false);
   const [pendingEquipment, setPendingEquipment] = useState<{slot: keyof UserInfo["equipment"], item: Item} | null>(null);
+  const [isSelectingSkill, setIsSelectingSkill] = useState(false);
+  const [combatTarget, setCombatTarget] = useState<{ name: string; count: number } | null>(null);
   const [isGMThinking, setIsGMThinking] = useState(false);
   
   // New States for Resources and Combat
@@ -251,8 +253,14 @@ export default function App() {
       if (!isDuplicate) {
         const newItem = createItem(slot, itemName);
         setPendingEquipment({ slot, item: newItem });
+        
+        // Format the display text according to user request: "성공 시 획득: [아이템이름](등급/색상)"
+        const rarityText = `(${newItem.rarity})`;
         cleanText = cleanText.replace(equipMatch[0], "").trim();
-        cleanText += `\n\n🎁 **새로운 장비 발견: [${itemName}] (${newItem.rarity})**\n이 장비를 장착하시겠습니까?`;
+        
+        // If "성공 시 획득: [아이템이름]" already exists in text, we'll just handle it in GameRoom.
+        // But we add the prompt to equip.
+        cleanText += `\n\n이 장비를 장착하시겠습니까?`;
         overrideChoices = [`[${itemName}] 장착하기`, "장착하지 않기"];
       } else {
         cleanText = cleanText.replace(equipMatch[0], "").trim();
@@ -268,7 +276,8 @@ export default function App() {
         ...prev,
         ownedFateKeywords: Array.from(new Set([...prev.ownedFateKeywords, newKeyword]))
       }));
-      cleanText = cleanText.replace(fateAwardMatch[0], `\n\n✨ 새로운 운명 키워드 획득: [${newKeyword}]`);
+      cleanText = cleanText.replace(fateAwardMatch[0], "").trim();
+      cleanText += `\n\n✨ 새로운 운명 키워드 획득: [${newKeyword}]`;
     }
 
     const normalAwardMatch = cleanText.match(/\[AWARD_NORMAL:(.+?)\]/);
@@ -278,7 +287,8 @@ export default function App() {
         ...prev,
         ownedNormalKeywords: Array.from(new Set([...prev.ownedNormalKeywords, newKeyword]))
       }));
-      cleanText = cleanText.replace(normalAwardMatch[0], `\n\n📜 새로운 일반 키워드 획득: [${newKeyword}]`);
+      cleanText = cleanText.replace(normalAwardMatch[0], "").trim();
+      cleanText += `\n\n📜 새로운 일반 키워드 획득: [${newKeyword}]`;
     }
 
     // 3. EXP
@@ -290,19 +300,34 @@ export default function App() {
         let newLevel = prev.level;
         let newStatPoints = prev.statPoints;
         let newMaxExp = prev.maxExp;
-    while (newExp >= newMaxExp) {
-      newExp -= newMaxExp;
-      newLevel += 1;
-      newStatPoints += 5;
-      newMaxExp = Math.floor(newMaxExp * 1.5);
-      setScreenEffect("LEVEL_UP");
-      setTimeout(() => setScreenEffect(null), 2000);
+        let newMaxHp = prev.maxHp;
+        let newMaxMp = prev.maxMp;
+        let newHp = prev.hp;
+        let newMp = prev.mp;
+
+        while (newExp >= newMaxExp) {
+          newExp -= newMaxExp;
+          newLevel += 1;
+          newStatPoints += 5;
+          newMaxExp = Math.floor(newMaxExp * 1.5);
+          // Auto heal on level up
+          newHp = newMaxHp;
+          newMp = newMaxMp;
+        }
+
+        return { 
+          ...prev, 
+          level: newLevel, 
+          exp: newExp, 
+          maxExp: newMaxExp, 
+          statPoints: newStatPoints,
+          hp: newHp,
+          mp: newMp
+        };
+      });
+      cleanText = cleanText.replace(expMatch[0], "").trim();
+      cleanText += `\n\n✨ 경험치 획득: +${expAmount} EXP`;
     }
-    return { ...prev, level: newLevel, exp: newExp, maxExp: newMaxExp, statPoints: newStatPoints };
-  });
-  cleanText = cleanText.replace(expMatch[0], "").trim();
-  cleanText += `\n\n✨ 경험치 획득: +${expAmount} EXP`;
-}
 
 // 4. Damage / Heal / Cost
 const damageMatch = cleanText.match(/\[DAMAGE:(\d+)\]/);
@@ -341,17 +366,24 @@ if (costMatch) {
 }
 
 // 5. Target Tracker
-const targetMatch = cleanText.match(/\[TARGET:(.+?):(\d+):(\d+)\]/);
+    const targetMatch = cleanText.match(/\[TARGET:(.+?):(\d+):(\d+)(?::(\d+))?\]/);
 if (targetMatch) {
   const name = targetMatch[1];
   const hp = parseInt(targetMatch[2]);
   const maxHp = parseInt(targetMatch[3]);
+  const count = targetMatch[4] ? parseInt(targetMatch[4]) : 1;
   if (hp <= 0) {
     setCurrentTarget(null);
+    setCombatTarget(null);
   } else {
     setCurrentTarget({ name, hp, maxHp });
+    setCombatTarget({ name, count });
   }
   cleanText = cleanText.replace(targetMatch[0], "").trim();
+} else if (cleanText.includes("[TARGET_CLEAR]")) {
+  setCurrentTarget(null);
+  setCombatTarget(null);
+  cleanText = cleanText.replace("[TARGET_CLEAR]", "").trim();
 }
 
 return { text: cleanText, choices: overrideChoices };
@@ -400,6 +432,10 @@ return { text: cleanText, choices: overrideChoices };
         level: 1,
         exp: 0,
         maxExp: 100,
+        hp: 200,
+        maxHp: 200,
+        mp: 200,
+        maxMp: 200,
         stats: { str: 15, dex: 15, int: 15, vit: 15 },
         statPoints: 0,
         equipment: {
@@ -495,22 +531,48 @@ return { text: cleanText, choices: overrideChoices };
     
     setUserInfo(prev => {
       const nextStats = { ...prev.stats, [stat]: prev.stats[stat] + 1 };
-      const nextMaxHp = nextStats.vit * 10 + prev.level * 20;
-      const nextMaxMp = nextStats.int * 10 + prev.level * 10;
+      let nextMaxHp = prev.maxHp;
+      let nextMaxMp = prev.maxMp;
+      let nextHp = prev.hp;
+      let nextMp = prev.mp;
+
+      if (stat === "vit") {
+        nextMaxHp += 10;
+        nextHp += 10;
+      } else if (stat === "int") {
+        nextMaxMp += 10;
+        nextMp += 10;
+      }
+
       return {
         ...prev,
         statPoints: prev.statPoints - 1,
         stats: nextStats,
         maxHp: nextMaxHp,
         maxMp: nextMaxMp,
-        hp: stat === "vit" ? prev.hp + 10 : prev.hp,
-        mp: stat === "int" ? prev.mp + 10 : prev.mp
+        hp: nextHp,
+        mp: nextMp
       };
     });
   }, [userInfo.statPoints]);
 
   const handleSendMessage = useCallback(async (text: string, isInternal: boolean = false) => {
     if (!socket) return;
+
+    if (isSelectingSkill) {
+      setIsSelectingSkill(false);
+    }
+
+    // Intercept combat choice for skill
+    if (text === "스킬 공격") {
+      setIsSelectingSkill(true);
+      return;
+    }
+
+    if (text === "[기술 사용 취소]") {
+      setIsSelectingSkill(false);
+      return;
+    }
 
     if (text === "[기술 사용 요청]") {
       setActiveModal("SKILLS");
@@ -603,13 +665,14 @@ return { text: cleanText, choices: overrideChoices };
           1. **접두사 금지**: "시스템:", "GM:" 등을 절대 쓰지 마세요.
           2. **상황 묘사**: 상황 묘사는 최대 3문장 이내로 간결하게 하세요.
           3. **선택지 형식**: 답변의 마지막에 반드시 4개의 선택지를 아래 형식으로 작성하세요. 4번 선택지는 항상 "[4] 직접 행동 입력"으로 고정하세요.
-          4. **장비 보상 (엄격 제한)**: 
+          4. **장비 보상 및 패널티 (엄격 제한)**: 
              - 장비는 매우 희귀하게 부여해야 합니다. 연속으로 장비를 주지 마세요.
              - 장비는 반드시 **전투 승리 후** 또는 **매우 특별한 이벤트 성공 후**에만 보상으로 제공하세요.
-             - 일반적인 상황 묘사나 선택지 제시와 동시에 장비를 주지 마세요. (전투가 시작되기도 전에 템부터 주는 행위 절대 금지)
-             - 장비를 보상으로 줄 때는 반드시 "[EQUIP_AWARD:슬롯:아이템이름]" 형식을 포함하세요.
+             - 장비 보상 시 반드시 본문에 "성공 시 획득: 아이템이름(등급색상)" 형식을 포함하고, 뒤에 "[EQUIP_AWARD:슬롯:아이템이름]" 태그를 붙이세요.
+             - 등급색상 종류: 일반색, 초록색, 파랑색, 보라색, 주황색, 빨강색
+             - 예: 성공 시 획득: 강철 롱소드(초록색) [EQUIP_AWARD:weapon:강철 롱소드]
+             - 패널티: 주사위 판정 실패 시 상황에 따라 체력이나 마나를 감소시키세요. 반드시 본문에 관련 묘사를 적고 "[DAMAGE:수치]" (체력) 또는 "[COST:수치]" (마나) 태그를 사용하세요.
              - 슬롯 종류: weapon(무기), armor(방어구), gloves(장갑), boots(신발), sub(보조장비), artifact(유물)
-             - 예: [EQUIP_AWARD:weapon:강철 롱소드]
              - 답변 본문에는 전투 승리 후 전리품을 챙기거나 보상을 받는 상황을 묘사하세요.
           5. **주사위 판정 (중요)**: 
              - 주사위 판정은 남발하지 마세요. 정말 중요하고 극적인 순간(치명적인 전투, 복잡한 함정 해제, 중요한 설득 등)에만 선택지에 포함시키세요.
@@ -617,9 +680,18 @@ return { text: cleanText, choices: overrideChoices };
              - 플레이어가 주사위 판정 선택지를 골랐을 때만, 답변 안에 "[DICE_ROLL:목표수치]" 형식을 포함하세요. (예: [DICE_ROLL:12])
              - 답변 본문에는 주사위를 굴리기 전의 긴장감 넘치는 상황 묘사만 작성하세요.
              - **성공/실패 결과**는 반드시 "[SUCCESS:성공 시 내용]", "[FAILURE:실패 시 내용]" 태그를 사용하여 답변 끝에 포함하세요.
+             - 결과 내용 안에도 아이템 획득([EQUIP_AWARD...])이나 경험치([EXP_AWARD...]) 등의 태그를 포함할 수 있습니다.
              - 주사위 판정은 20면체 주사위(D20)를 기준으로 합니다.
-          6. **키워드 활용**: 장착 중인 키워드와 연관된 특수 선택지를 제공할 때, 반드시 개연성을 유지하세요.
-          7. **경험치 지급 (엄격 제한)**: 
+          6. **전투 시스템 (전투 전용 선택지)**:
+             - 전투가 시작되면 반드시 "[TARGET:몬스터이름:현재체력:최대체력:개체수]" 태그를 포함하세요. 개체수가 1보다 크면 해당 수치를 마지막에 적으세요. (예: [TARGET:고블린:20:20:3])
+             - 전투 중에는 항상 다음 4가지 선택지를 고정적으로 제시하세요:
+               1. 일반 공격
+               2. [주사위 판정: 수치 이상] 과감한 일격 (박살내거나 혹은 치명적인 반격을 받음)
+               3. 스킬 공격
+               4. [주사위 판정: 수치 이상] 도망가기 (실패 시 피해 입음, 다시 시도 가능)
+             - 전투가 종료되면 반드시 "[TARGET_CLEAR]" 태그를 포함하세요.
+          7. **키워드 활용**: 장착 중인 키워드와 연관된 특수 선택지를 제공할 때, 반드시 개연성을 유지하세요.
+          8. **경험치 지급 (엄격 제한)**: 
              - 경험치는 반드시 **전투 승리** 또는 **부탁/퀘스트를 완전히 해결한 후**에만 지급하세요.
              - 부탁을 수락하거나 대화를 시작하는 시점에는 절대 경험치를 주지 마세요. (선불 지급 금지)
              - 전투 승리나 퀘스트 완료 시 반드시 "[EXP_AWARD:수치]" 형식을 포함하세요.
@@ -637,16 +709,16 @@ return { text: cleanText, choices: overrideChoices };
         
         let gmResponse = await askGM(prompt);
         
-        // Extract choices using a more robust regex that handles both single-line and multi-line formats
+        // Extract choices using a more robust regex that handles both [1] and 1. formats
         const choices: string[] = [];
-        const choiceRegex = /(\d+)\.\s+(.+?)(?=\s*\d+\.\s+|$)/g;
+        const choiceRegex = /(?:\[(\d+)\]|(\d+)\.)\s+(.+?)(?=\s*(?:\[\d+\]|\d+\.)\s+|$)/g;
         let match;
         while ((match = choiceRegex.exec(gmResponse)) !== null) {
-          choices.push(match[2].trim());
+          choices.push((match[3] || "").trim());
         }
         
         // Clean text (remove choice lines)
-        let cleanText = gmResponse.replace(/(\d+)\.\s+(.+?)(?=\s*\d+\.\s+|$)/g, "").trim();
+        let cleanText = gmResponse.replace(/(?:\[(\d+)\]|(\d+)\.)\s+(.+?)(?=\s*(?:\[\d+\]|\d+\.)\s+|$)/g, "").trim();
 
         // Check for dice roll keyword in the cleaned text
         const diceMatch = cleanText.match(/\[DICE_ROLL:(\d+)\]/);
@@ -676,12 +748,21 @@ return { text: cleanText, choices: overrideChoices };
             setTargetNumber(null);
 
             const isSuccess = result >= goal;
-            const rawOutcome = isSuccess 
+            const outcomeWithChoices = isSuccess 
               ? successMatch ? successMatch[1] : "성공했습니다!"
               : failureMatch ? failureMatch[1] : "실패했습니다...";
             
-            const processed = processRewards(rawOutcome);
-            const finalChoices = processed.choices || (choices.length > 0 ? choices : undefined);
+            // Re-extract choices from outcome if present
+            const outcomeChoices: string[] = [];
+            const oMatchRegex = /(?:\[(\d+)\]|(\d+)\.)\s+(.+?)(?=\s*(?:\[\d+\]|\d+\.)\s+|$)/g;
+            let oMatch;
+            while ((oMatch = oMatchRegex.exec(outcomeWithChoices)) !== null) {
+              outcomeChoices.push((oMatch[3] || "").trim());
+            }
+            const cleanOutcome = outcomeWithChoices.replace(/(?:\[(\d+)\]|(\d+)\.)\s+(.+?)(?=\s*(?:\[\d+\]|\d+\.)\s+|$)/g, "").trim();
+
+            const processed = processRewards(cleanOutcome);
+            const finalChoices = processed.choices || (outcomeChoices.length > 0 ? outcomeChoices : (choices.length > 0 ? choices : undefined));
 
             const outcomeText = isSuccess 
               ? `🎲 주사위 판정 성공! (${result} >= ${goal})\n\n${processed.text}`
@@ -904,7 +985,9 @@ return { text: cleanText, choices: overrideChoices };
                     </div>
                     <div className="px-4 flex flex-col justify-center min-w-[100px]">
                       <div className="flex justify-between items-baseline gap-3 mb-0.5">
-                        <span className="text-[9px] text-red-400 font-serif truncate max-w-[70px] italic font-bold tracking-wider">{currentTarget.name}</span>
+                        <span className="text-[9px] text-red-400 font-serif truncate max-w-[70px] italic font-bold tracking-wider">
+                          {currentTarget.name} {combatTarget && combatTarget.count > 1 && `(x${combatTarget.count})`}
+                        </span>
                         <span className="text-[8px] font-mono text-white/40">{currentTarget.hp}/{currentTarget.maxHp}</span>
                       </div>
                       <div className="h-1 w-full bg-black/60 rounded-full overflow-hidden border border-red-500/10">
@@ -960,7 +1043,7 @@ return { text: cleanText, choices: overrideChoices };
                       <div className="h-1 w-32 bg-black/60 rounded-full overflow-hidden border border-white/5 relative">
                         <motion.div 
                           initial={{ width: 0 }}
-                          animate={{ width: `${(userInfo.mp / userInfo.maxHp) * 100}%` }}
+                          animate={{ width: `${(userInfo.mp / userInfo.maxMp) * 100}%` }}
                           className="h-full bg-blue-500 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.3)]"
                         />
                       </div>
@@ -1274,7 +1357,9 @@ return { text: cleanText, choices: overrideChoices };
                       whileHover={{ scale: 1.02, backgroundColor: "rgba(255, 255, 255, 0.05)" }}
                       whileTap={{ scale: 0.98 }}
                       onClick={currentRoom === GLOBAL_LOBBY ? handleHome : () => {
+                        const randomName = generateRandomName();
                         setCurrentRoom(GLOBAL_LOBBY);
+                        setUserInfo(prev => ({ ...prev, name: randomName }));
                         setHasCreatedChar(false);
                         setIsReady(false);
                       }}
@@ -1342,6 +1427,8 @@ return { text: cleanText, choices: overrideChoices };
                     diceResult={diceResult}
                     targetNumber={targetNumber}
                     currentTarget={currentTarget}
+                    combatTarget={combatTarget}
+                    isSelectingSkill={isSelectingSkill}
                   />
                   
                   {/* Countdown Overlay */}
@@ -1775,7 +1862,15 @@ return { text: cleanText, choices: overrideChoices };
                                     alert("마력이 부족합니다!");
                                     return;
                                   }
-                                  handleSendMessage(`[기술 시전: ${skill.name}] - ${skill.desc}`);
+                                  
+                                  // Deduct MP
+                                  setUserInfo(prev => ({
+                                    ...prev,
+                                    mp: Math.max(0, prev.mp - skill.cost)
+                                  }));
+                                  
+                                  const skillMsg = `[기술 시전: ${skill.name}] - ${skill.desc}`;
+                                  handleSendMessage(skillMsg);
                                   setActiveModal(null);
                                 }}
                                 className="text-left p-4 border border-editorial-gold/10 hover:border-editorial-gold/60 transition-all group flex flex-col gap-1"
